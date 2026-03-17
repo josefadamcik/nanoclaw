@@ -1,8 +1,26 @@
-# NanoClaw Email Improvements
+# NanoClaw Improvements
 
-## Current State
+## Security Hardening (VPS Deployment)
 
-### Gmail-Only via Google API
+### ~~Credential proxy binds to `0.0.0.0` on bare-metal Linux~~ (Fixed)
+
+**Status:** Fixed in `src/container-runtime.ts`.
+
+`detectProxyBindHost()` now throws a descriptive error instead of falling back to `0.0.0.0` when the `docker0` interface is not found on bare-metal Linux. The `CREDENTIAL_PROXY_HOST` env var override still works as before and short-circuits detection entirely.
+
+### ~~`/remote-control` command bypasses sender allowlist~~ (Fixed)
+
+**Status:** Fixed. Handler extracted to `src/remote-control-handler.ts`.
+
+The `/remote-control` command now checks the sender allowlist before granting access. `is_from_me` messages bypass the check (owner is always allowed). The handler was extracted from the `main()` closure in `src/index.ts` into a standalone testable module with 8 unit tests.
+
+---
+
+## Email Improvements
+
+### Current State
+
+#### Gmail-Only via Google API
 
 Email support is implemented exclusively through the Gmail API using the `@gongrzhe/server-gmail-autoauth-mcp` MCP server. There are two modes:
 
@@ -11,169 +29,38 @@ Email support is implemented exclusively through the Gmail API using the `@gongr
 
 Credentials are stored in `~/.gmail-mcp/` (GCP OAuth keys + tokens) and mounted read-only into containers.
 
-### No IMAP/SMTP Support
+### ~~No IMAP/SMTP Support~~ (Implemented)
 
-There is no generic email protocol support. Users without a Google Workspace or Gmail account cannot use the email channel.
+**Status:** Implemented in `src/channels/imap.ts`.
 
-### No Attachment Handling
+A generic IMAP/SMTP channel is now available. Configure with `IMAP_HOST`, `IMAP_USER`, `IMAP_PASS` env vars. Uses ImapFlow for IMAP IDLE-based real-time delivery and nodemailer for SMTP outbound with `In-Reply-To`/`References` threading headers. Messages are marked as `\Seen` after processing. JID format: `imap:<email-address>`.
 
-The core `NewMessage` interface (`src/types.ts`) is text-only:
+Additional env vars with defaults: `IMAP_PORT` (993), `IMAP_TLS` (true), `IMAP_FOLDER` (INBOX), `SMTP_HOST` (IMAP_HOST), `SMTP_PORT` (587), `SMTP_USER` (IMAP_USER), `SMTP_PASS` (IMAP_PASS), `IMAP_FROM` (IMAP_USER).
 
-```typescript
-interface NewMessage {
-  id: string;
-  chat_jid: string;
-  sender: string;
-  sender_name: string;
-  content: string;        // text body only
-  timestamp: string;
-  is_from_me?: boolean;
-  is_bot_message?: boolean;
-}
-```
+### ~~No Attachment Handling~~ (Implemented)
 
-The `messages` database table mirrors this — no columns for attachment metadata. Email attachments are silently dropped during ingestion.
+**Status:** Implemented across `src/types.ts`, `src/db.ts`, `src/router.ts`.
+
+The `NewMessage` interface now includes an optional `attachments` field with `Attachment` objects (`id`, `filename`, `mimeType`, `size`). An `attachments` SQLite table stores metadata with optional `local_path`. `storeMessage()` auto-stores attachments. `formatMessages()` includes `<attachments><file ... /></attachments>` XML blocks in agent context.
 
 ---
 
-## Improvement: Generic IMAP/SMTP Channel
+## Remaining Work
 
-### Goal
+### Attachment Download and Mounting
 
-Allow any email provider (Outlook, Fastmail, self-hosted) by adding an IMAP/SMTP channel alongside the existing Gmail channel.
+Attachment metadata is stored and formatted, but channels do not yet download attachment content to disk. To complete the feature:
 
-### Approach
-
-Use the existing self-registration pattern in `src/channels/registry.ts`:
-
-```typescript
-// src/channels/imap.ts
-import { registerChannel } from './registry.js';
-
-function imapFactory(opts: ChannelOpts): Channel | null {
-  const host = process.env.IMAP_HOST;
-  const user = process.env.IMAP_USER;
-  const pass = process.env.IMAP_PASS;
-  if (!host || !user || !pass) return null;
-  return new ImapChannel(opts, { host, user, pass });
-}
-
-registerChannel('imap', imapFactory);
-```
-
-Then add the import to `src/channels/index.ts` so it self-registers at startup.
-
-### Implementation Details
-
-| Concern | Design |
-|---------|--------|
-| **Library** | `imapflow` for IMAP (IDLE support, modern API), `nodemailer` for SMTP |
-| **Polling vs IDLE** | Use IMAP IDLE for real-time delivery; fall back to polling if IDLE is unavailable |
-| **JID format** | `imap:<sender>/<message-id>` to avoid collision with Gmail JIDs |
-| **Thread grouping** | Use `In-Reply-To` / `References` headers to group threads |
-| **Outbound** | `sendMessage()` composes a reply via SMTP, preserving `References` header for threading |
-| **Credentials** | Environment variables (`IMAP_HOST`, `IMAP_PORT`, `IMAP_USER`, `IMAP_PASS`, `SMTP_HOST`, `SMTP_PORT`) |
-| **TLS** | Required by default; optional `IMAP_TLS=false` for local dev servers |
-| **Folder filtering** | `IMAP_FOLDER=INBOX` (default), configurable to monitor other folders |
-
-### Channel Class Skeleton
-
-```typescript
-class ImapChannel implements Channel {
-  name = 'imap';
-
-  async connect(): Promise<void> {
-    // 1. Connect to IMAP server
-    // 2. Open configured folder
-    // 3. Start IDLE listener (or polling interval)
-    // 4. Fetch unread messages → convert to NewMessage → call onMessage()
-  }
-
-  async sendMessage(jid: string, text: string): Promise<void> {
-    // 1. Parse recipient and thread ID from JID
-    // 2. Compose reply with nodemailer (set In-Reply-To, References)
-    // 3. Send via SMTP
-  }
-
-  ownsJid(jid: string): boolean {
-    return jid.startsWith('imap:');
-  }
-
-  isConnected(): boolean { /* return IMAP connection state */ }
-  async disconnect(): Promise<void> { /* close IMAP + SMTP connections */ }
-}
-```
-
----
-
-## Improvement: Email Attachment Support
-
-### Goal
-
-Allow agents to receive and reference email attachments (images, PDFs, documents) instead of silently dropping them.
-
-### Step 1: Extend the Message Interface
-
-Add an optional `attachments` field to `NewMessage` in `src/types.ts`:
-
-```typescript
-interface Attachment {
-  id: string;           // unique reference (e.g., Gmail attachment ID or content-id)
-  filename: string;     // original filename
-  mimeType: string;     // e.g., "application/pdf", "image/png"
-  size: number;         // bytes
-}
-
-interface NewMessage {
-  // ...existing fields...
-  attachments?: Attachment[];
-}
-```
-
-### Step 2: Store Attachment Metadata
-
-Add an `attachments` table to the SQLite schema in `src/db.ts`:
-
-```sql
-CREATE TABLE IF NOT EXISTS attachments (
-  id TEXT PRIMARY KEY,
-  message_id TEXT NOT NULL,
-  chat_jid TEXT NOT NULL,
-  filename TEXT,
-  mime_type TEXT,
-  size INTEGER,
-  local_path TEXT,
-  FOREIGN KEY (message_id, chat_jid) REFERENCES messages(id, chat_jid)
-);
-```
-
-### Step 3: Download and Mount Attachments
-
-When a channel receives a message with attachments:
-
-1. Download the attachment to a group-local directory (e.g., `groups/{name}/attachments/{id}-{filename}`)
-2. Record metadata in the `attachments` table
-3. Include attachment references in the `NewMessage` so the agent sees them
-4. The attachment directory is already within the group folder, which is mounted into the container at `/workspace/group/`
-
-### Step 4: Update Message Formatting
-
-Extend `formatMessages()` in `src/router.ts` to include attachment metadata in the XML sent to the agent:
-
-```xml
-<message sender="alice@example.com" time="2026-03-17T10:00:00Z">
-  Please review the attached report.
-  <attachments>
-    <file name="report.pdf" type="application/pdf" size="245000" path="/workspace/group/attachments/abc-report.pdf"/>
-  </attachments>
-</message>
-```
-
-The agent can then read the file directly from its mounted filesystem.
+1. Download attachments to a group-local directory (e.g., `groups/{name}/attachments/{id}-{filename}`)
+2. Pass `localPaths` to `storeAttachments()` to record the on-disk path
+3. Include `path` attribute in the `<file>` XML element so agents can read files directly
+4. The attachment directory is already within the group folder, which is mounted into containers at `/workspace/group/`
 
 ### Size and Safety Considerations
 
-- Set a per-attachment size limit (e.g., 10 MB) to avoid filling container disk
-- Set a per-message attachment count limit (e.g., 10 files)
+Not yet implemented:
+
+- Per-attachment size limit (e.g., 10 MB) to avoid filling container disk
+- Per-message attachment count limit (e.g., 10 files)
 - Skip or warn on executable attachments (`.exe`, `.sh`, `.bat`)
-- Store attachments outside the git-tracked `groups/` directory if disk is a concern, using a configurable `ATTACHMENT_DIR`
+- Configurable `ATTACHMENT_DIR` for storing attachments outside git-tracked `groups/` directory
