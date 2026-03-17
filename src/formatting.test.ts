@@ -121,6 +121,64 @@ describe('formatMessages', () => {
     expect(result).toContain('PM');
     expect(result).toContain('<context timezone="America/New_York" />');
   });
+
+  it('includes attachments block when message has attachments', () => {
+    const result = formatMessages(
+      [
+        makeMsg({
+          content: 'see attached',
+          attachments: [
+            {
+              id: 'a1',
+              filename: 'report.pdf',
+              mimeType: 'application/pdf',
+              size: 1024,
+            },
+            {
+              id: 'a2',
+              filename: 'photo.png',
+              mimeType: 'image/png',
+              size: 2048,
+            },
+          ],
+        }),
+      ],
+      TZ,
+    );
+    expect(result).toContain('<attachments>');
+    expect(result).toContain(
+      '<file name="report.pdf" type="application/pdf" size="1024" />',
+    );
+    expect(result).toContain(
+      '<file name="photo.png" type="image/png" size="2048" />',
+    );
+    expect(result).toContain('</attachments>');
+  });
+
+  it('does not include attachments block when message has no attachments', () => {
+    const result = formatMessages([makeMsg()], TZ);
+    expect(result).not.toContain('<attachments>');
+    expect(result).not.toContain('<file');
+  });
+
+  it('escapes special chars in attachment filenames', () => {
+    const result = formatMessages(
+      [
+        makeMsg({
+          attachments: [
+            {
+              id: 'a1',
+              filename: 'file <"test">.pdf',
+              mimeType: 'application/pdf',
+              size: 100,
+            },
+          ],
+        }),
+      ],
+      TZ,
+    );
+    expect(result).toContain('name="file &lt;&quot;test&quot;&gt;.pdf"');
+  });
 });
 
 // --- TRIGGER_PATTERN ---

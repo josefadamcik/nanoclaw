@@ -6,6 +6,7 @@ import { ASSISTANT_NAME, DATA_DIR, STORE_DIR } from './config.js';
 import { isValidGroupFolder } from './group-folder.js';
 import { logger } from './logger.js';
 import {
+  Attachment,
   NewMessage,
   RegisteredGroup,
   ScheduledTask,
@@ -64,6 +65,19 @@ function createSchema(database: Database.Database): void {
       FOREIGN KEY (task_id) REFERENCES scheduled_tasks(id)
     );
     CREATE INDEX IF NOT EXISTS idx_task_run_logs ON task_run_logs(task_id, run_at);
+
+    CREATE TABLE IF NOT EXISTS attachments (
+      id TEXT,
+      message_id TEXT NOT NULL,
+      chat_jid TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      mime_type TEXT NOT NULL,
+      size INTEGER NOT NULL,
+      local_path TEXT,
+      PRIMARY KEY (id, message_id, chat_jid),
+      FOREIGN KEY (message_id, chat_jid) REFERENCES messages(id, chat_jid)
+    );
+    CREATE INDEX IF NOT EXISTS idx_attachments_message ON attachments(message_id, chat_jid);
 
     CREATE TABLE IF NOT EXISTS router_state (
       key TEXT PRIMARY KEY,
@@ -273,6 +287,9 @@ export function storeMessage(msg: NewMessage): void {
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
   );
+  if (msg.attachments && msg.attachments.length > 0) {
+    storeAttachments(msg.id, msg.chat_jid, msg.attachments);
+  }
 }
 
 /**
@@ -300,6 +317,49 @@ export function storeMessageDirect(msg: {
     msg.is_from_me ? 1 : 0,
     msg.is_bot_message ? 1 : 0,
   );
+}
+
+export function storeAttachments(
+  messageId: string,
+  chatJid: string,
+  attachments: Attachment[],
+  localPaths?: Record<string, string>,
+): void {
+  const stmt = db.prepare(
+    `INSERT OR REPLACE INTO attachments (id, message_id, chat_jid, filename, mime_type, size, local_path) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const a of attachments) {
+    stmt.run(
+      a.id,
+      messageId,
+      chatJid,
+      a.filename,
+      a.mimeType,
+      a.size,
+      localPaths?.[a.id] ?? null,
+    );
+  }
+}
+
+export interface AttachmentRow {
+  id: string;
+  message_id: string;
+  chat_jid: string;
+  filename: string;
+  mime_type: string;
+  size: number;
+  local_path: string | null;
+}
+
+export function getAttachmentsForMessage(
+  messageId: string,
+  chatJid: string,
+): AttachmentRow[] {
+  return db
+    .prepare(
+      `SELECT id, message_id, chat_jid, filename, mime_type, size, local_path FROM attachments WHERE message_id = ? AND chat_jid = ?`,
+    )
+    .all(messageId, chatJid) as AttachmentRow[];
 }
 
 export function getNewMessages(

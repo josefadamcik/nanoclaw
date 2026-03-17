@@ -37,7 +37,13 @@ function detectProxyBindHost(): string {
     const ipv4 = docker0.find((a) => a.family === 'IPv4');
     if (ipv4) return ipv4.address;
   }
-  return '0.0.0.0';
+  logger.error(
+    'Cannot detect container bridge IP — no docker0 interface found. ' +
+      'Set CREDENTIAL_PROXY_HOST to the address containers can reach the host on.',
+  );
+  throw new Error(
+    'No container bridge IP detected. Set CREDENTIAL_PROXY_HOST env var.',
+  );
 }
 
 /** CLI args needed for the container to resolve the host gateway. */

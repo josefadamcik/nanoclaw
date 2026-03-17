@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock logger
 vi.mock('./logger.js', () => ({
@@ -145,5 +145,101 @@ describe('cleanupOrphans', () => {
       { count: 2, names: ['nanoclaw-a-1', 'nanoclaw-b-2'] },
       'Stopped orphaned containers',
     );
+  });
+});
+
+// --- detectProxyBindHost (module-level constant — requires resetModules) ---
+// These tests use vi.mock for os and fs so that reimported modules see the mocks.
+
+const mockPlatform = vi.fn();
+const mockNetworkInterfaces = vi.fn();
+const mockExistsSync = vi.fn();
+
+describe('detectProxyBindHost', () => {
+  const originalEnv = process.env.CREDENTIAL_PROXY_HOST;
+
+  beforeEach(() => {
+    // Reset mocks for each test — vi.mock hoists apply globally
+    vi.doMock('os', () => ({
+      default: {
+        platform: mockPlatform,
+        networkInterfaces: mockNetworkInterfaces,
+      },
+      platform: mockPlatform,
+      networkInterfaces: mockNetworkInterfaces,
+    }));
+    vi.doMock('fs', () => ({
+      default: { existsSync: mockExistsSync },
+      existsSync: mockExistsSync,
+    }));
+    mockPlatform.mockReset();
+    mockNetworkInterfaces.mockReset();
+    mockExistsSync.mockReset();
+  });
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.CREDENTIAL_PROXY_HOST;
+    } else {
+      process.env.CREDENTIAL_PROXY_HOST = originalEnv;
+    }
+    vi.doUnmock('os');
+    vi.doUnmock('fs');
+  });
+
+  async function reimport() {
+    vi.resetModules();
+    return import('./container-runtime.js');
+  }
+
+  it('returns env var when CREDENTIAL_PROXY_HOST is set', async () => {
+    process.env.CREDENTIAL_PROXY_HOST = '10.0.0.5';
+    const mod = await reimport();
+    expect(mod.PROXY_BIND_HOST).toBe('10.0.0.5');
+  });
+
+  it('returns 127.0.0.1 on macOS', async () => {
+    delete process.env.CREDENTIAL_PROXY_HOST;
+    mockPlatform.mockReturnValue('darwin');
+    const mod = await reimport();
+    expect(mod.PROXY_BIND_HOST).toBe('127.0.0.1');
+  });
+
+  it('returns 127.0.0.1 on WSL', async () => {
+    delete process.env.CREDENTIAL_PROXY_HOST;
+    mockPlatform.mockReturnValue('linux');
+    mockExistsSync.mockImplementation(
+      (p: string) => p === '/proc/sys/fs/binfmt_misc/WSLInterop',
+    );
+    const mod = await reimport();
+    expect(mod.PROXY_BIND_HOST).toBe('127.0.0.1');
+  });
+
+  it('returns docker0 bridge IP on Linux with docker0', async () => {
+    delete process.env.CREDENTIAL_PROXY_HOST;
+    mockPlatform.mockReturnValue('linux');
+    mockExistsSync.mockReturnValue(false);
+    mockNetworkInterfaces.mockReturnValue({
+      docker0: [
+        {
+          address: '172.17.0.1',
+          netmask: '255.255.0.0',
+          family: 'IPv4',
+          mac: '00:00:00:00:00:00',
+          internal: false,
+          cidr: '172.17.0.1/16',
+        },
+      ],
+    });
+    const mod = await reimport();
+    expect(mod.PROXY_BIND_HOST).toBe('172.17.0.1');
+  });
+
+  it('throws on Linux without docker0 and no env override', async () => {
+    delete process.env.CREDENTIAL_PROXY_HOST;
+    mockPlatform.mockReturnValue('linux');
+    mockExistsSync.mockReturnValue(false);
+    mockNetworkInterfaces.mockReturnValue({});
+    await expect(reimport()).rejects.toThrow('No container bridge IP detected');
   });
 });

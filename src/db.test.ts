@@ -4,12 +4,14 @@ import {
   _initTestDatabase,
   createTask,
   deleteTask,
+  getAttachmentsForMessage,
   getAllChats,
   getAllRegisteredGroups,
   getMessagesSince,
   getNewMessages,
   getTaskById,
   setRegisteredGroup,
+  storeAttachments,
   storeChatMetadata,
   storeMessage,
   updateTask,
@@ -480,5 +482,85 @@ describe('registered group isMain', () => {
     const group = groups['group@g.us'];
     expect(group).toBeDefined();
     expect(group.isMain).toBeUndefined();
+  });
+});
+
+// --- Attachments ---
+
+describe('attachments', () => {
+  beforeEach(() => {
+    storeChatMetadata('group@g.us', '2024-01-01T00:00:00.000Z');
+    store({
+      id: 'msg-att',
+      chat_jid: 'group@g.us',
+      sender: '123@s.whatsapp.net',
+      sender_name: 'Alice',
+      content: 'see attached',
+      timestamp: '2024-01-01T00:00:01.000Z',
+    });
+  });
+
+  it('stores and retrieves attachments for a message', () => {
+    storeAttachments('msg-att', 'group@g.us', [
+      {
+        id: 'att-1',
+        filename: 'report.pdf',
+        mimeType: 'application/pdf',
+        size: 1024,
+      },
+      { id: 'att-2', filename: 'photo.png', mimeType: 'image/png', size: 2048 },
+    ]);
+
+    const rows = getAttachmentsForMessage('msg-att', 'group@g.us');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].filename).toBe('report.pdf');
+    expect(rows[0].mime_type).toBe('application/pdf');
+    expect(rows[0].size).toBe(1024);
+    expect(rows[1].filename).toBe('photo.png');
+  });
+
+  it('stores attachments with local paths', () => {
+    storeAttachments(
+      'msg-att',
+      'group@g.us',
+      [
+        {
+          id: 'att-1',
+          filename: 'doc.pdf',
+          mimeType: 'application/pdf',
+          size: 500,
+        },
+      ],
+      { 'att-1': '/workspace/group/attachments/att-1-doc.pdf' },
+    );
+
+    const rows = getAttachmentsForMessage('msg-att', 'group@g.us');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].local_path).toBe(
+      '/workspace/group/attachments/att-1-doc.pdf',
+    );
+  });
+
+  it('storeMessage with attachments auto-stores them', () => {
+    storeMessage({
+      id: 'msg-auto',
+      chat_jid: 'group@g.us',
+      sender: '123@s.whatsapp.net',
+      sender_name: 'Alice',
+      content: 'files attached',
+      timestamp: '2024-01-01T00:00:02.000Z',
+      attachments: [
+        { id: 'a1', filename: 'file.txt', mimeType: 'text/plain', size: 100 },
+      ],
+    });
+
+    const rows = getAttachmentsForMessage('msg-auto', 'group@g.us');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].filename).toBe('file.txt');
+  });
+
+  it('returns empty array when no attachments exist', () => {
+    const rows = getAttachmentsForMessage('msg-att', 'group@g.us');
+    expect(rows).toHaveLength(0);
   });
 });
