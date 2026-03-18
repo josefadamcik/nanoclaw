@@ -2,6 +2,7 @@ import { ImapFlow, type FetchMessageObject } from 'imapflow';
 import { createTransport, type Transporter } from 'nodemailer';
 import { simpleParser, type ParsedMail } from 'mailparser';
 
+import { readEnvFile } from '../env.js';
 import { logger } from '../logger.js';
 import { Attachment, Channel, NewMessage } from '../types.js';
 import { registerChannel, ChannelOpts } from './registry.js';
@@ -21,23 +22,27 @@ interface ImapConfig {
 }
 
 function loadConfig(): ImapConfig | null {
-  const host = process.env.IMAP_HOST;
-  const user = process.env.IMAP_USER;
-  const pass = process.env.IMAP_PASS;
+  const env = readEnvFile([
+    'IMAP_HOST', 'IMAP_USER', 'IMAP_PASS', 'IMAP_PORT', 'IMAP_TLS',
+    'IMAP_FOLDER', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'IMAP_FROM',
+  ]);
+  const host = process.env.IMAP_HOST || env.IMAP_HOST;
+  const user = process.env.IMAP_USER || env.IMAP_USER;
+  const pass = process.env.IMAP_PASS || env.IMAP_PASS;
   if (!host || !user || !pass) return null;
 
   return {
     host,
-    port: parseInt(process.env.IMAP_PORT || '993', 10),
+    port: parseInt(process.env.IMAP_PORT || env.IMAP_PORT || '993', 10),
     user,
     pass,
-    tls: process.env.IMAP_TLS !== 'false',
-    folder: process.env.IMAP_FOLDER || 'INBOX',
-    smtpHost: process.env.SMTP_HOST || host,
-    smtpPort: parseInt(process.env.SMTP_PORT || '587', 10),
-    smtpUser: process.env.SMTP_USER || user,
-    smtpPass: process.env.SMTP_PASS || pass,
-    from: process.env.IMAP_FROM || user,
+    tls: (process.env.IMAP_TLS || env.IMAP_TLS) !== 'false',
+    folder: process.env.IMAP_FOLDER || env.IMAP_FOLDER || 'INBOX',
+    smtpHost: process.env.SMTP_HOST || env.SMTP_HOST || host,
+    smtpPort: parseInt(process.env.SMTP_PORT || env.SMTP_PORT || '587', 10),
+    smtpUser: process.env.SMTP_USER || env.SMTP_USER || user,
+    smtpPass: process.env.SMTP_PASS || env.SMTP_PASS || pass,
+    from: process.env.IMAP_FROM || env.IMAP_FROM || user,
   };
 }
 
