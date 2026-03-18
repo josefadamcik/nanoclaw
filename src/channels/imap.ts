@@ -23,8 +23,17 @@ interface ImapConfig {
 
 function loadConfig(): ImapConfig | null {
   const env = readEnvFile([
-    'IMAP_HOST', 'IMAP_USER', 'IMAP_PASS', 'IMAP_PORT', 'IMAP_TLS',
-    'IMAP_FOLDER', 'SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'IMAP_FROM',
+    'IMAP_HOST',
+    'IMAP_USER',
+    'IMAP_PASS',
+    'IMAP_PORT',
+    'IMAP_TLS',
+    'IMAP_FOLDER',
+    'SMTP_HOST',
+    'SMTP_PORT',
+    'SMTP_USER',
+    'SMTP_PASS',
+    'IMAP_FROM',
   ]);
   const host = process.env.IMAP_HOST || env.IMAP_HOST;
   const user = process.env.IMAP_USER || env.IMAP_USER;
